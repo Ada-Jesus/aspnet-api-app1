@@ -31,6 +31,10 @@
 # .github/workflows/blue-green-deploy.yml
 # FIXED: Blue/Green deployment with proper service selection
 # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# .github/workflows/blue-green-deploy.yml
+# FIXED: Stable Blue/Green ECS deployment pipeline
+# ═══════════════════════════════════════════════════════════════════
 
 name: 🚀 Blue/Green Deploy
 
@@ -46,11 +50,11 @@ permissions:
   contents: read
 
 
+jobs:
+
 # ─────────────────────────────────────────
 # BUILD
 # ─────────────────────────────────────────
-jobs:
-
   build-test:
     runs-on: ubuntu-latest
 
@@ -102,7 +106,7 @@ jobs:
 
 
 # ─────────────────────────────────────────
-# DEPLOY (FIXED BLUE/GREEN FLOW)
+# DEPLOY (BLUE/GREEN CORE)
 # ─────────────────────────────────────────
   deploy:
     runs-on: ubuntu-latest
@@ -119,9 +123,9 @@ jobs:
         aws-region: ${{ vars.AWS_REGION }}
 
     # ─────────────────────────────────────────
-    # EXPORT ALL REQUIRED VARIABLES
+    # EXPORT REQUIRED VARIABLES
     # ─────────────────────────────────────────
-    - name: Export env vars
+    - name: Load environment variables
       run: |
         echo "ALB_LISTENER_ARN=${{ vars.ALB_LISTENER_ARN }}" >> $GITHUB_ENV
         echo "BLUE_TG_ARN=${{ vars.BLUE_TG_ARN }}" >> $GITHUB_ENV
@@ -132,12 +136,6 @@ jobs:
         echo "ALB_DNS_NAME=${{ vars.ALB_DNS_NAME }}" >> $GITHUB_ENV
         echo "DESIRED_COUNT=${{ vars.DESIRED_COUNT }}" >> $GITHUB_ENV
 
-    # ─────────────────────────────────────────
-    # DEBUG (SAFE TO KEEP)
-    # ─────────────────────────────────────────
-    - name: Debug env
-      run: env | grep -E "ALB|TG|ECS|SERVICE" || true
-
 
     # ─────────────────────────────────────────
     # SLOT DETECTION
@@ -147,9 +145,9 @@ jobs:
 
 
     # ─────────────────────────────────────────
-    # FIXED: REGISTER TASK (NO MORE DEPLOY_SERVICE ERROR)
+    # SET DEPLOY SERVICE (FIXED BLUE/GREEN SWITCH)
     # ─────────────────────────────────────────
-    - name: Set deploy service
+    - name: Decide deploy service
       run: |
         if [ "$ACTIVE_SLOT" = "blue" ]; then
           echo "DEPLOY_SERVICE=$GREEN_SERVICE" >> $GITHUB_ENV
@@ -159,16 +157,29 @@ jobs:
           echo "TARGET_SLOT=blue" >> $GITHUB_ENV
         fi
 
+
+    # ─────────────────────────────────────────
+    # REGISTER TASK (FIXED - EXPORT TASK_DEF_ARN)
+    # ─────────────────────────────────────────
     - name: Register task
       env:
         IMAGE_URI: ${{ needs.docker-push.outputs.image-uri }}
-      run: bash infra/scripts/register_task.sh
+      run: |
+        bash infra/scripts/register_task.sh
+
+        # IMPORTANT: ensure task definition is exported
+        echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
 
 
     # ─────────────────────────────────────────
-    # SCALE UP (FIXED CONTEXT)
+    # SCALE UP (FIXED - NO UNBOUND VARIABLE)
     # ─────────────────────────────────────────
     - name: Scale up
+      env:
+        TASK_DEF_ARN: ${{ env.TASK_DEF_ARN }}
+        DESIRED_COUNT: ${{ vars.DESIRED_COUNT }}
+        DEPLOY_SERVICE: ${{ env.DEPLOY_SERVICE }}
+        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
       run: bash infra/scripts/scale_up.sh
 
 
@@ -187,7 +198,7 @@ jobs:
 
 
     # ─────────────────────────────────────────
-    # SCALE DOWN OLD
+    # SCALE DOWN OLD VERSION
     # ─────────────────────────────────────────
     - name: Scale down old
       run: bash infra/scripts/scale_down.sh
