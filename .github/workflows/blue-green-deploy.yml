@@ -27,6 +27,10 @@
 #  .github/workflows/blue-green-deploy.yml
 #  Zero-Downtime Blue/Green – ASP.NET Core 8 → ECR → ECS Fargate
 # ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════
+# .github/workflows/blue-green-deploy.yml
+# FIXED: Blue/Green deployment with proper service selection
+# ═══════════════════════════════════════════════════════════════════
 
 name: 🚀 Blue/Green Deploy
 
@@ -36,10 +40,11 @@ on:
 
 env:
   IMAGE_TAG: ${{ github.run_number }}
-  AWS_REGION: us-east-1
+  AWS_REGION: ${{ vars.AWS_REGION }}
 
 permissions:
   contents: read
+
 
 # ─────────────────────────────────────────
 # BUILD
@@ -97,7 +102,7 @@ jobs:
 
 
 # ─────────────────────────────────────────
-# DEPLOY (FIXED VERSION)
+# DEPLOY (FIXED BLUE/GREEN FLOW)
 # ─────────────────────────────────────────
   deploy:
     runs-on: ubuntu-latest
@@ -114,28 +119,25 @@ jobs:
         aws-region: ${{ vars.AWS_REGION }}
 
     # ─────────────────────────────────────────
-    # FORCE GLOBAL ENV EXPORT (CRITICAL FIX)
+    # EXPORT ALL REQUIRED VARIABLES
     # ─────────────────────────────────────────
-    - name: Load environment variables
+    - name: Export env vars
       run: |
         echo "ALB_LISTENER_ARN=${{ vars.ALB_LISTENER_ARN }}" >> $GITHUB_ENV
         echo "BLUE_TG_ARN=${{ vars.BLUE_TG_ARN }}" >> $GITHUB_ENV
         echo "GREEN_TG_ARN=${{ vars.GREEN_TG_ARN }}" >> $GITHUB_ENV
         echo "BLUE_SERVICE=${{ vars.BLUE_SERVICE }}" >> $GITHUB_ENV
         echo "GREEN_SERVICE=${{ vars.GREEN_SERVICE }}" >> $GITHUB_ENV
-        echo "AWS_REGION=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
         echo "ECS_CLUSTER=${{ vars.ECS_CLUSTER }}" >> $GITHUB_ENV
         echo "ALB_DNS_NAME=${{ vars.ALB_DNS_NAME }}" >> $GITHUB_ENV
         echo "DESIRED_COUNT=${{ vars.DESIRED_COUNT }}" >> $GITHUB_ENV
 
     # ─────────────────────────────────────────
-    # DEBUG (DO NOT REMOVE YET)
+    # DEBUG (SAFE TO KEEP)
     # ─────────────────────────────────────────
-    - name: Debug Variables
-      run: |
-        env | grep ALB || true
-        env | grep TG || true
-        env | grep ECS || true
+    - name: Debug env
+      run: env | grep -E "ALB|TG|ECS|SERVICE" || true
+
 
     # ─────────────────────────────────────────
     # SLOT DETECTION
@@ -143,19 +145,32 @@ jobs:
     - name: Detect slot
       run: bash infra/scripts/detect_slot.sh
 
+
     # ─────────────────────────────────────────
-    # REGISTER TASK
+    # FIXED: REGISTER TASK (NO MORE DEPLOY_SERVICE ERROR)
     # ─────────────────────────────────────────
+    - name: Set deploy service
+      run: |
+        if [ "$ACTIVE_SLOT" = "blue" ]; then
+          echo "DEPLOY_SERVICE=$GREEN_SERVICE" >> $GITHUB_ENV
+          echo "TARGET_SLOT=green" >> $GITHUB_ENV
+        else
+          echo "DEPLOY_SERVICE=$BLUE_SERVICE" >> $GITHUB_ENV
+          echo "TARGET_SLOT=blue" >> $GITHUB_ENV
+        fi
+
     - name: Register task
       env:
         IMAGE_URI: ${{ needs.docker-push.outputs.image-uri }}
       run: bash infra/scripts/register_task.sh
 
+
     # ─────────────────────────────────────────
-    # SCALE UP (previous failure point)
+    # SCALE UP (FIXED CONTEXT)
     # ─────────────────────────────────────────
     - name: Scale up
       run: bash infra/scripts/scale_up.sh
+
 
     # ─────────────────────────────────────────
     # HEALTH CHECK
@@ -163,11 +178,13 @@ jobs:
     - name: Smoke test
       run: bash infra/scripts/smoke_test.sh
 
+
     # ─────────────────────────────────────────
-    # TRAFFIC SWITCH
+    # SWITCH TRAFFIC
     # ─────────────────────────────────────────
     - name: Switch traffic
       run: bash infra/scripts/switch_traffic.sh
+
 
     # ─────────────────────────────────────────
     # SCALE DOWN OLD
