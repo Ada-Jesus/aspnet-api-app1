@@ -4,20 +4,18 @@ set -euo pipefail
 : "${IMAGE_URI:?Missing IMAGE_URI}"
 : "${AWS_REGION:?Missing AWS_REGION}"
 
-echo "==> Registering new task definition..."
+echo "==> Registering ECS task definition..."
 
-# ALWAYS use repo root safe path
-TASK_DEF_FILE="infra/terraform/task-definition.json"
+TASK_DEF_FILE="$(pwd)/infra/terraform/task-definition.json"
 
 if [ ! -f "$TASK_DEF_FILE" ]; then
-  echo "❌ Task definition file not found at: $TASK_DEF_FILE"
-  ls -R infra || true
+  echo "Task definition not found: $TASK_DEF_FILE"
   exit 1
 fi
 
-TASK_DEF_JSON=$(cat "$TASK_DEF_FILE")
+TASK_JSON=$(cat "$TASK_DEF_FILE")
 
-NEW_TASK_DEF=$(echo "$TASK_DEF_JSON" | jq \
+NEW_TASK=$(echo "$TASK_JSON" | jq \
   --arg IMAGE "$IMAGE_URI" \
   '.containerDefinitions[0].image = $IMAGE
   | del(
@@ -30,13 +28,11 @@ NEW_TASK_DEF=$(echo "$TASK_DEF_JSON" | jq \
       .registeredBy
     )')
 
-TASK_DEF_ARN=$(aws ecs register-task-definition \
-  --cli-input-json "$NEW_TASK_DEF" \
+TASK_ARN=$(aws ecs register-task-definition \
+  --cli-input-json "$NEW_TASK" \
   --query "taskDefinition.taskDefinitionArn" \
   --output text \
   --region "$AWS_REGION")
 
-echo "==> Registered task definition:"
-echo "$TASK_DEF_ARN"
-
-echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
+echo "TASK_DEF_ARN=$TASK_ARN" >> $GITHUB_ENV
+echo "Registered: $TASK_ARN"

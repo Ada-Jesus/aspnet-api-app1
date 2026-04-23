@@ -34,9 +34,8 @@
 # ═══════════════════════════════════════════════════════════════════
 # .github/workflows/blue-green-deploy.yml
 # FIXED: Stable Blue/Green ECS deployment pipeline
-# ═══════════════════════════════════════════════════════════════════
-
-name: 🚀 Blue/Green Deploy
+# ══════════════════════════════════════
+name: 🚀 Blue/Green Deploy (FIXED)
 
 on:
   push:
@@ -44,36 +43,28 @@ on:
 
 env:
   IMAGE_TAG: ${{ github.run_number }}
-  AWS_REGION: ${{ vars.AWS_REGION }}
 
 permissions:
   contents: read
 
-
 jobs:
 
-# ─────────────────────────────────────────
-# BUILD
-# ─────────────────────────────────────────
+# ───────────────────────── BUILD ─────────────────────────
   build-test:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+    - uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '8.x'
+        dotnet-version: "8.x"
 
     - run: dotnet restore
-    - run: dotnet build --no-restore -c Release
-    - run: dotnet test --no-build -c Release
+    - run: dotnet build -c Release --no-restore
+    - run: dotnet test -c Release --no-build
 
 
-# ─────────────────────────────────────────
-# DOCKER BUILD + PUSH
-# ─────────────────────────────────────────
+# ───────────────────────── DOCKER ─────────────────────────
   docker-push:
     runs-on: ubuntu-latest
     needs: build-test
@@ -84,30 +75,24 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
+    - uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ vars.AWS_REGION }}
 
-    - name: Login to ECR
-      uses: aws-actions/amazon-ecr-login@v2
+    - uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Build & Push Docker Image
-      env:
-        ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+    - name: Build & Push
       run: |
-        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-        docker push $ECR_REPOSITORY:$IMAGE_TAG
+        docker build -t ${{ vars.ECR_REPOSITORY }}:${{ github.run_number }} .
+        docker push ${{ vars.ECR_REPOSITORY }}:${{ github.run_number }}
 
     - id: out
-      run: echo "image-uri=${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
+      run: echo "image-uri=${{ vars.ECR_REPOSITORY }}:${{ github.run_number }}" >> $GITHUB_OUTPUT
 
 
-# ─────────────────────────────────────────
-# DEPLOY (BLUE/GREEN CORE)
-# ─────────────────────────────────────────
+# ───────────────────────── DEPLOY ─────────────────────────
   deploy:
     runs-on: ubuntu-latest
     needs: docker-push
@@ -115,98 +100,57 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
+    - uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ vars.AWS_REGION }}
 
-    # ─────────────────────────────────────────
-    # EXPORT REQUIRED VARIABLES
-    # ─────────────────────────────────────────
-    - name: Load environment variables
-      run: |
-        echo "ALB_LISTENER_ARN=${{ vars.ALB_LISTENER_ARN }}" >> $GITHUB_ENV
-        echo "BLUE_TG_ARN=${{ vars.BLUE_TG_ARN }}" >> $GITHUB_ENV
-        echo "GREEN_TG_ARN=${{ vars.GREEN_TG_ARN }}" >> $GITHUB_ENV
-        echo "BLUE_SERVICE=${{ vars.BLUE_SERVICE }}" >> $GITHUB_ENV
-        echo "GREEN_SERVICE=${{ vars.GREEN_SERVICE }}" >> $GITHUB_ENV
-        echo "ECS_CLUSTER=${{ vars.ECS_CLUSTER }}" >> $GITHUB_ENV
-        echo "ALB_DNS_NAME=${{ vars.ALB_DNS_NAME }}" >> $GITHUB_ENV
-        echo "DESIRED_COUNT=${{ vars.DESIRED_COUNT }}" >> $GITHUB_ENV
-
-
-    # ─────────────────────────────────────────
-    # SLOT DETECTION
-    # ─────────────────────────────────────────
+    # ───── DETECT SLOT ─────
     - name: Detect slot
       run: bash infra/scripts/detect_slot.sh
+      env:
+        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+        BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
+        GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
+        BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
+        GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
 
-
-    # ─────────────────────────────────────────
-    # SET DEPLOY SERVICE (FIXED BLUE/GREEN SWITCH)
-    # ─────────────────────────────────────────
-    - name: Decide deploy service
-      run: |
-        if [ "$ACTIVE_SLOT" = "blue" ]; then
-          echo "DEPLOY_SERVICE=$GREEN_SERVICE" >> $GITHUB_ENV
-          echo "TARGET_SLOT=green" >> $GITHUB_ENV
-        else
-          echo "DEPLOY_SERVICE=$BLUE_SERVICE" >> $GITHUB_ENV
-          echo "TARGET_SLOT=blue" >> $GITHUB_ENV
-        fi
-
-
-    # ─────────────────────────────────────────
-    # REGISTER TASK (FIXED - EXPORT TASK_DEF_ARN)
-    # ─────────────────────────────────────────
+    # ───── REGISTER TASK (FIXED) ─────
     - name: Register task
+      run: bash infra/scripts/register_task.sh
       env:
         IMAGE_URI: ${{ needs.docker-push.outputs.image-uri }}
-      run: |
-        bash infra/scripts/register_task.sh
+        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+        DEPLOY_SERVICE: ${{ env.DEPLOY_SERVICE }}
 
-        # IMPORTANT: ensure task definition is exported
-        echo "TASK_DEF_ARN=$TASK_DEF_ARN" >> $GITHUB_ENV
-
-
-    # ─────────────────────────────────────────
-    # SCALE UP (FIXED - NO UNBOUND VARIABLE)
-    # ─────────────────────────────────────────
+    # ───── SCALE UP (FIXED) ─────
     - name: Scale up
+      run: bash infra/scripts/scale_up.sh
       env:
-        TASK_DEF_ARN: ${{ env.TASK_DEF_ARN }}
+        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
         DESIRED_COUNT: ${{ vars.DESIRED_COUNT }}
         DEPLOY_SERVICE: ${{ env.DEPLOY_SERVICE }}
-        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-      run: bash infra/scripts/scale_up.sh
+        TASK_DEF_ARN: ${{ env.TASK_DEF_ARN }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
 
-
-    # ─────────────────────────────────────────
-    # HEALTH CHECK
-    # ─────────────────────────────────────────
+    # ───── SMOKE TEST ─────
     - name: Smoke test
       run: bash infra/scripts/smoke_test.sh
+      env:
+        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
 
-
-    # ─────────────────────────────────────────
-    # SWITCH TRAFFIC
-    # ─────────────────────────────────────────
+    # ───── SWITCH TRAFFIC ─────
     - name: Switch traffic
       run: bash infra/scripts/switch_traffic.sh
 
-
-    # ─────────────────────────────────────────
-    # SCALE DOWN OLD VERSION
-    # ─────────────────────────────────────────
+    # ───── SCALE DOWN OLD ─────
     - name: Scale down old
       run: bash infra/scripts/scale_down.sh
 
 
-# ─────────────────────────────────────────
-# MONITOR
-# ─────────────────────────────────────────
+# ───────────────────────── MONITOR ─────────────────────────
   monitor:
     runs-on: ubuntu-latest
     needs: deploy
@@ -214,12 +158,10 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
+    - uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ vars.AWS_REGION }}
 
-    - name: Burn-in monitoring
-      run: bash infra/scripts/monitor_burnin.sh
+    - run: bash infra/scripts/monitor_burnin.sh

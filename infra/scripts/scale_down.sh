@@ -14,12 +14,16 @@
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-echo "==> Scaling down: ${LIVE_SERVICE}"
+: "${LIVE_SERVICE:?Missing LIVE_SERVICE}"
+: "${ECS_CLUSTER:?Missing ECS_CLUSTER}"
+: "${AWS_REGION:?Missing AWS_REGION}"
+
+echo "==> Scaling down $LIVE_SERVICE"
 
 aws ecs update-service \
-  --cluster "${ECS_CLUSTER}" \
-  --service "${LIVE_SERVICE}" \
+  --cluster "$ECS_CLUSTER" \
+  --service "$LIVE_SERVICE" \
   --desired-count 0 \
-  --region "${AWS_REGION}"
+  --region "$AWS_REGION"
 
-echo "==> Old slot scaled to 0"
+echo "Done"
