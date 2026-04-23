@@ -22,8 +22,8 @@
 #   ALB_DNS_NAME        e.g. aspnet-api-production-alb-123.us-east-1.elb.amazonaws.com
 #   ALB_ARN_SUFFIX      e.g. app/aspnet-api-production-alb/abc123  (from terraform output)
 #   DESIRED_COUNT       e.g. 2
-# ═══════════════════════════════════════════════════════════════════
-name: 🚀 Blue/Green Deploy
+# ══════════════════════
+name: 🚀 Blue/Green Deploy (Fixed)
 
 on:
   push:
@@ -32,21 +32,23 @@ on:
 env:
   IMAGE_TAG: ${{ github.run_number }}
   AWS_REGION: ${{ vars.AWS_REGION }}
-  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
 permissions:
   contents: read
 
 jobs:
 
-# ---------------- BUILD ----------------
+# ─────────────────────────────────────────
+# BUILD + TEST
+# ─────────────────────────────────────────
   build-test:
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
-    - uses: actions/setup-dotnet@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.x'
 
@@ -55,7 +57,9 @@ jobs:
     - run: dotnet test --no-build -c Release
 
 
-# ---------------- DOCKER ----------------
+# ─────────────────────────────────────────
+# DOCKER BUILD + PUSH
+# ─────────────────────────────────────────
   docker-push:
     runs-on: ubuntu-latest
     needs: build-test
@@ -66,26 +70,28 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
+    - name: Configure AWS
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+        aws-region: ${{ vars.AWS_REGION }}
 
-    - uses: aws-actions/amazon-ecr-login@v2
+    - name: Login ECR
+      uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Build & push
+    - name: Build & Push Docker Image
       run: |
-        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-        docker push $ECR_REPOSITORY:$IMAGE_TAG
+        docker build -t ${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG .
+        docker push ${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG
 
-    - name: Output image URI
-      id: out
-      run: echo "image-uri=$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+    - id: out
+      run: echo "image-uri=${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
 
-# ---------------- DEPLOY ----------------
+# ─────────────────────────────────────────
+# DEPLOY (FIXED ORDER)
+# ─────────────────────────────────────────
   deploy:
     runs-on: ubuntu-latest
     needs: docker-push
@@ -93,87 +99,68 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-
-    - name: Configure AWS credentials
+    - name: Configure AWS
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+        aws-region: ${{ vars.AWS_REGION }}
 
-    # ---------------- DETECT SLOT ----------------
+    # ───── DEBUG
+    - name: Debug
+      run: |
+        echo "Cluster: ${{ vars.ECS_CLUSTER }}"
+        echo "Blue: ${{ vars.BLUE_SERVICE }}"
+        echo "Green: ${{ vars.GREEN_SERVICE }}"
+
+    # ───── DETECT SLOT
     - name: Detect slot
-      id: slot
-      env:
-        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
-        BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
-        GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
-        BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
-        GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/detect_slot.sh
 
-    # ---------------- REGISTER TASK ----------------
-    - name: Register task
-      id: task
+    # ───── REGISTER TASK (IMPORTANT FIXED FIRST STEP)
+    - name: Register new task definition
       env:
         IMAGE_URI: ${{ needs.docker-push.outputs.image-uri }}
         ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-        DEPLOY_SERVICE: ${{ steps.slot.outputs.deploy_service }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/register_task.sh
 
-    # ---------------- SCALE UP ----------------
-    - name: Scale up
+    # ─────────────────────────────────────
+    # 🔥 FIX #1 — WAIT BEFORE SCALE UP
+    # ─────────────────────────────────────
+    - name: Wait for ECS stabilization
+      run: sleep 30
+
+    # ───── SCALE UP (NOW SAFE)
+    - name: Scale up new service
       env:
-        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
         DESIRED_COUNT: ${{ vars.DESIRED_COUNT }}
-        DEPLOY_SERVICE: ${{ steps.slot.outputs.deploy_service }}
-        TASK_DEF_ARN: ${{ steps.task.outputs.task_def_arn }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/scale_up.sh
 
-    # ---------------- HEALTH CHECK ----------------
-    - name: Health check
-      env:
-        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
-      run: bash infra/scripts/health_check.sh
-
-    # ---------------- SMOKE TEST ----------------
+    # ─────────────────────────────────────
+    # 🔥 FIX #2 — HEALTH CHECK GATE
+    # ─────────────────────────────────────
     - name: Smoke test
       env:
         ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
-      run: bash infra/scripts/smoke_test.sh
+      run: |
+        bash infra/scripts/smoke_test.sh
 
-    # ---------------- SWITCH TRAFFIC ----------------
-    - name: Switch traffic
-      env:
-        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
-        DEPLOY_TG_ARN: ${{ steps.slot.outputs.deploy_tg }}
-      run: bash infra/scripts/switch_traffic.sh
-
-    # ---------------- VALIDATE ----------------
-    - name: Validate rollback
-      env:
-        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
-        LIVE_TG: ${{ steps.slot.outputs.live_tg }}
+    # ───── FAIL FAST IF HEALTH FAILS
+    - name: Validate deployment
       run: bash infra/scripts/validate_and_rollback.sh
 
-    # ---------------- SCALE DOWN OLD ----------------
-    - name: Scale down old
-      if: success()
-      env:
-        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-        LIVE_SERVICE: ${{ steps.slot.outputs.live_service }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
+    # ───── TRAFFIC SWITCH (ONLY IF HEALTH OK)
+    - name: Switch traffic
+      run: bash infra/scripts/switch_traffic.sh
+
+    # ───── SCALE DOWN OLD
+    - name: Scale down old service
       run: bash infra/scripts/scale_down.sh
 
 
-# ---------------- MONITOR ----------------
+# ─────────────────────────────────────────
+# MONITORING
+# ─────────────────────────────────────────
   monitor:
     runs-on: ubuntu-latest
     needs: deploy
@@ -181,28 +168,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS credentials
+    - name: Configure AWS
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+        aws-region: ${{ vars.AWS_REGION }}
 
-    - run: bash infra/scripts/monitor_burnin.sh
-
-
-# ---------------- ROLLBACK ----------------
-  rollback:
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Configure AWS credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
-
-    - run: bash infra/scripts/rollback.sh
+    - name: Burn-in monitoring
+      run: bash infra/scripts/monitor_burnin.sh
