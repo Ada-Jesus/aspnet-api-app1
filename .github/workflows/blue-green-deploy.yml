@@ -96,6 +96,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    # ---------------- INSTALL TOOLS ----------------
+    - name: Install jq
+      run: sudo apt-get update && sudo apt-get install -y jq
+
+    # ---------------- AWS LOGIN ----------------
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -103,12 +108,7 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    # DEBUG (can remove later)
-    - name: Debug ALB variable
-      run: |
-        echo "ALB_LISTENER_ARN = '${{ vars.ALB_LISTENER_ARN }}'"
-
-    # ✅ FIXED DETECT SLOT
+    # ---------------- SLOT DETECTION ----------------
     - name: Detect slot
       id: slot
       env:
@@ -118,11 +118,9 @@ jobs:
         BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
         GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
         AWS_REGION: ${{ vars.AWS_REGION }}
-      run: |
-        echo "DEBUG ALB_LISTENER_ARN=$ALB_LISTENER_ARN"
-        bash infra/scripts/detect_slot.sh
+      run: bash infra/scripts/detect_slot.sh
 
-    # ✅ FIXED REGISTER TASK
+    # ---------------- REGISTER TASK ----------------
     - name: Register task
       id: task
       env:
@@ -132,37 +130,40 @@ jobs:
         AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/register_task.sh
 
+    # ---------------- SCALE UP ----------------
     - name: Scale up
       env:
         ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-        DEPLOY_SERVICE: ${{ steps.slot.outputs.deploy_service }}
         DESIRED_COUNT: ${{ vars.DESIRED_COUNT }}
+        DEPLOY_SERVICE: ${{ steps.slot.outputs.deploy_service }}
         AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/scale_up.sh
 
+    # ---------------- HEALTH CHECK ----------------
     - name: Health check
       env:
         ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
       run: bash infra/scripts/health_check.sh
 
+    # ---------------- SWITCH TRAFFIC ----------------
     - name: Switch traffic
       env:
         ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
-        DEPLOY_TG_ARN: ${{ steps.slot.outputs.deploy_tg }}
         AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/switch_traffic.sh
 
+    # ---------------- VALIDATE ----------------
     - name: Validate rollback
       env:
         ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
         AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/validate_and_rollback.sh
 
+    # ---------------- SCALE DOWN OLD ----------------
     - name: Scale down old
       if: success()
       env:
         ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-        LIVE_SERVICE: ${{ steps.slot.outputs.live_service }}
         AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/scale_down.sh
 
