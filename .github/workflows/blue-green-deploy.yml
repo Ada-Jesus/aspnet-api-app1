@@ -31,7 +31,8 @@ on:
 
 env:
   IMAGE_TAG: ${{ github.run_number }}
-  AWS_REGION: us-east-1   # ✅ hardcoded (fixes your issue)
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
 
 permissions:
@@ -67,14 +68,14 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: AWS login
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1   # ✅ critical fix
+        aws-region: ${{ env.AWS_REGION }}
 
-    - name: ECR login
+    - name: Login to ECR
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Build & push image
@@ -95,41 +96,67 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: AWS login
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1   # ✅ critical fix
+        aws-region: ${{ env.AWS_REGION }}
 
-    - name: Make scripts executable
-      run: chmod +x infra/scripts/*.sh
+    # 🔍 DEBUG STEP (CONFIRMS VARIABLE IS LOADED)
+    - name: Debug ALB variable
+      run: |
+        echo "ALB_LISTENER_ARN = '${{ vars.ALB_LISTENER_ARN }}'"
 
+    # 🔥 FIXED DETECT SLOT STEP
     - name: Detect slot
-      id: slot
-      run: bash infra/scripts/detect_slot.sh
+      env:
+        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+        BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
+        GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
+        BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
+        GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
+      run: |
+        echo "DEBUG ALB_LISTENER_ARN=$ALB_LISTENER_ARN"
+        bash infra/scripts/detect_slot.sh
 
     - name: Register task
-      id: task
       env:
         IMAGE_URI: ${{ needs.docker-push.outputs.image-uri }}
         ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/register_task.sh
 
     - name: Scale up
+      env:
+        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+        DESIRED_COUNT: ${{ vars.DESIRED_COUNT }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/scale_up.sh
 
     - name: Health check
+      env:
+        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
       run: bash infra/scripts/health_check.sh
 
     - name: Switch traffic
+      env:
+        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/switch_traffic.sh
 
     - name: Validate rollback
+      env:
+        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/validate_and_rollback.sh
 
     - name: Scale down old
       if: success()
+      env:
+        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/scale_down.sh
 
 
@@ -141,12 +168,12 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: AWS login
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1   # ✅ critical fix
+        aws-region: ${{ env.AWS_REGION }}
 
     - run: bash infra/scripts/monitor_burnin.sh
 
@@ -158,11 +185,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: AWS login
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: us-east-1   # ✅ critical fix
+        aws-region: ${{ env.AWS_REGION }}
 
     - run: bash infra/scripts/rollback.sh
