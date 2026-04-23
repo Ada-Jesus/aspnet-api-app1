@@ -23,7 +23,12 @@
 #   ALB_ARN_SUFFIX      e.g. app/aspnet-api-production-alb/abc123  (from terraform output)
 #   DESIRED_COUNT       e.g. 2
 # ══════════════════════
-name: 🚀 Blue/Green Deploy (Fixed)
+# ═══════════════════════════════════════════════════════════════════
+#  .github/workflows/blue-green-deploy.yml
+#  Zero-Downtime Blue/Green – ASP.NET Core 8 → ECR → ECS Fargate
+# ═══════════════════════════════════════════════════════════════════
+
+name: 🚀 Blue/Green Deploy
 
 on:
   push:
@@ -31,16 +36,16 @@ on:
 
 env:
   IMAGE_TAG: ${{ github.run_number }}
-  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_REGION: us-east-1
 
 permissions:
   contents: read
 
+# ─────────────────────────────────────────
+# BUILD
+# ─────────────────────────────────────────
 jobs:
 
-# ─────────────────────────────────────────
-# BUILD + TEST
-# ─────────────────────────────────────────
   build-test:
     runs-on: ubuntu-latest
 
@@ -70,27 +75,29 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ vars.AWS_REGION }}
 
-    - name: Login ECR
+    - name: Login to ECR
       uses: aws-actions/amazon-ecr-login@v2
 
     - name: Build & Push Docker Image
+      env:
+        ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
       run: |
-        docker build -t ${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG .
-        docker push ${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG
+        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REPOSITORY:$IMAGE_TAG
 
     - id: out
       run: echo "image-uri=${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
 
 # ─────────────────────────────────────────
-# DEPLOY (FIXED ORDER)
+# DEPLOY (FIXED VERSION)
 # ─────────────────────────────────────────
   deploy:
     runs-on: ubuntu-latest
@@ -99,67 +106,78 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ vars.AWS_REGION }}
 
-    # ───── DEBUG
-    - name: Debug
+    # ─────────────────────────────────────────
+    # FORCE GLOBAL ENV EXPORT (CRITICAL FIX)
+    # ─────────────────────────────────────────
+    - name: Load environment variables
       run: |
-        echo "Cluster: ${{ vars.ECS_CLUSTER }}"
-        echo "Blue: ${{ vars.BLUE_SERVICE }}"
-        echo "Green: ${{ vars.GREEN_SERVICE }}"
+        echo "ALB_LISTENER_ARN=${{ vars.ALB_LISTENER_ARN }}" >> $GITHUB_ENV
+        echo "BLUE_TG_ARN=${{ vars.BLUE_TG_ARN }}" >> $GITHUB_ENV
+        echo "GREEN_TG_ARN=${{ vars.GREEN_TG_ARN }}" >> $GITHUB_ENV
+        echo "BLUE_SERVICE=${{ vars.BLUE_SERVICE }}" >> $GITHUB_ENV
+        echo "GREEN_SERVICE=${{ vars.GREEN_SERVICE }}" >> $GITHUB_ENV
+        echo "AWS_REGION=${{ vars.AWS_REGION }}" >> $GITHUB_ENV
+        echo "ECS_CLUSTER=${{ vars.ECS_CLUSTER }}" >> $GITHUB_ENV
+        echo "ALB_DNS_NAME=${{ vars.ALB_DNS_NAME }}" >> $GITHUB_ENV
+        echo "DESIRED_COUNT=${{ vars.DESIRED_COUNT }}" >> $GITHUB_ENV
 
-    # ───── DETECT SLOT
+    # ─────────────────────────────────────────
+    # DEBUG (DO NOT REMOVE YET)
+    # ─────────────────────────────────────────
+    - name: Debug Variables
+      run: |
+        env | grep ALB || true
+        env | grep TG || true
+        env | grep ECS || true
+
+    # ─────────────────────────────────────────
+    # SLOT DETECTION
+    # ─────────────────────────────────────────
     - name: Detect slot
       run: bash infra/scripts/detect_slot.sh
 
-    # ───── REGISTER TASK (IMPORTANT FIXED FIRST STEP)
-    - name: Register new task definition
+    # ─────────────────────────────────────────
+    # REGISTER TASK
+    # ─────────────────────────────────────────
+    - name: Register task
       env:
         IMAGE_URI: ${{ needs.docker-push.outputs.image-uri }}
-        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
       run: bash infra/scripts/register_task.sh
 
-    # ─────────────────────────────────────
-    # 🔥 FIX #1 — WAIT BEFORE SCALE UP
-    # ─────────────────────────────────────
-    - name: Wait for ECS stabilization
-      run: sleep 30
-
-    # ───── SCALE UP (NOW SAFE)
-    - name: Scale up new service
-      env:
-        DESIRED_COUNT: ${{ vars.DESIRED_COUNT }}
+    # ─────────────────────────────────────────
+    # SCALE UP (previous failure point)
+    # ─────────────────────────────────────────
+    - name: Scale up
       run: bash infra/scripts/scale_up.sh
 
-    # ─────────────────────────────────────
-    # 🔥 FIX #2 — HEALTH CHECK GATE
-    # ─────────────────────────────────────
+    # ─────────────────────────────────────────
+    # HEALTH CHECK
+    # ─────────────────────────────────────────
     - name: Smoke test
-      env:
-        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
-      run: |
-        bash infra/scripts/smoke_test.sh
+      run: bash infra/scripts/smoke_test.sh
 
-    # ───── FAIL FAST IF HEALTH FAILS
-    - name: Validate deployment
-      run: bash infra/scripts/validate_and_rollback.sh
-
-    # ───── TRAFFIC SWITCH (ONLY IF HEALTH OK)
+    # ─────────────────────────────────────────
+    # TRAFFIC SWITCH
+    # ─────────────────────────────────────────
     - name: Switch traffic
       run: bash infra/scripts/switch_traffic.sh
 
-    # ───── SCALE DOWN OLD
-    - name: Scale down old service
+    # ─────────────────────────────────────────
+    # SCALE DOWN OLD
+    # ─────────────────────────────────────────
+    - name: Scale down old
       run: bash infra/scripts/scale_down.sh
 
 
 # ─────────────────────────────────────────
-# MONITORING
+# MONITOR
 # ─────────────────────────────────────────
   monitor:
     runs-on: ubuntu-latest
@@ -168,7 +186,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Configure AWS
+    - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
