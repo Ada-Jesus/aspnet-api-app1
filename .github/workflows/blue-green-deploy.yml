@@ -34,7 +34,7 @@
 # ═══════════════════════════════════════════════════════════════════
 # .github/workflows/blue-green-deploy.yml
 # FIXED: Stable Blue/Green ECS deployment pipeline
-# ═══════
+
 name: 🚀 ASP.NET API CI/CD - Stable Blue/Green
 
 on:
@@ -75,6 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
 
+    # ✅ FIX: this is REQUIRED so deploy can access IMAGE
     outputs:
       image: ${{ steps.out.outputs.image }}
 
@@ -104,10 +105,6 @@ jobs:
 
         echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
 
-    # ✅ IMPORTANT FIX
-    - name: Export image globally
-      run: echo "IMAGE_URI=${{ steps.out.outputs.image }}" >> $GITHUB_ENV
-
 
 # ───────────────────────── DEPLOY ─────────────────────────
   deploy:
@@ -123,7 +120,7 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    # ───────────────────────── SLOT DETECTION ─────────────────────────
+    # ───────── SLOT DETECTION ─────────
     - name: Detect slot
       id: slot
       run: |
@@ -141,7 +138,7 @@ jobs:
           echo "live=$GREEN_SERVICE" >> $GITHUB_OUTPUT
         fi
 
-    # ───────────────────────── DEPLOY ─────────────────────────
+    # ───────── DEPLOY ─────────
     - name: Deploy to ECS
       run: bash infra/scripts/deploy.sh
       env:
@@ -149,7 +146,9 @@ jobs:
         ECS_CLUSTER: ${{ env.ECS_CLUSTER }}
         BLUE_SERVICE: ${{ env.BLUE_SERVICE }}
         GREEN_SERVICE: ${{ env.GREEN_SERVICE }}
-        IMAGE_URI: ${{ env.IMAGE_URI }}
+
+        # ✅ THIS IS THE FIX YOU WERE MISSING
+        IMAGE_URI: ${{ needs.docker.outputs.image }}
 
         ALB_DNS_NAME: ${{ steps.alb.outputs.dns }}
         ALB_LISTENER_ARN: ${{ steps.alb.outputs.listener }}
