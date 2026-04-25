@@ -3,12 +3,13 @@ set -euo pipefail
 
 : "${IMAGE_URI:?Missing IMAGE_URI}"
 : "${AWS_REGION:?Missing AWS_REGION}"
-: "${DEPLOY_SERVICE:?Missing DEPLOY_SERVICE}"
 
-echo "==> Registering task definition"
+TASK_FAMILY="aspnet-api-production"
+
+echo "==> Registering task definition for $TASK_FAMILY"
 
 RAW=$(aws ecs describe-task-definition \
-  --task-definition "$DEPLOY_SERVICE" \
+  --task-definition "$TASK_FAMILY" \
   --region "$AWS_REGION")
 
 UPDATED=$(echo "$RAW" | jq \
