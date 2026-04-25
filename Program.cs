@@ -16,6 +16,9 @@ app.UseSwaggerUI();
 // ---------------- HEALTH CHECK (ALB) ----------------
 app.MapGet("/health", () => Results.Ok("OK"));
 
+// ---------------- TEST ENDPOINT (ADDED) ----------------
+app.MapGet("/api/test", () => Results.Ok("working"));
+
 // ---------------- SAMPLE API ----------------
 var summaries = new[]
 {
