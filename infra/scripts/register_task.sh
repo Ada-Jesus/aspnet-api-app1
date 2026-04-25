@@ -2,34 +2,24 @@
 set -euo pipefail
 
 : "${IMAGE_URI:?Missing IMAGE_URI}"
-: "${AWS_REGION:?Missing AWS_REGION}"
+: "${AWS_REGION:?Missing}"
 
-TASK_FAMILY="aspnet-api-production"
+echo "Registering task definition with image: $IMAGE_URI"
 
-echo "==> Registering task definition for $TASK_FAMILY"
-
-RAW=$(aws ecs describe-task-definition \
-  --task-definition "$TASK_FAMILY" \
+TASK=$(aws ecs describe-task-definition \
+  --task-definition aspnet-api-production:5 \
   --region "$AWS_REGION")
 
-UPDATED=$(echo "$RAW" | jq \
-  --arg IMAGE "$IMAGE_URI" '
-  .taskDefinition
-  | .containerDefinitions[0].image = $IMAGE
-  | del(
-      .taskDefinitionArn,
-      .revision,
-      .status,
-      .requiresAttributes,
-      .compatibilities,
-      .registeredAt,
-      .registeredBy
-    )')
+echo "$TASK" | jq --arg IMAGE "$IMAGE_URI" '
+.taskDefinition
+| .containerDefinitions[0].image = $IMAGE
+| del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+' > task-def.json
 
-TASK_DEF_ARN=$(aws ecs register-task-definition \
-  --cli-input-json "$UPDATED" \
-  --region "$AWS_REGION" \
+NEW_TASK_ARN=$(aws ecs register-task-definition \
+  --cli-input-json file://task-def.json \
   --query "taskDefinition.taskDefinitionArn" \
-  --output text)
+  --output text \
+  --region "$AWS_REGION")
 
-echo "task_def_arn=$TASK_DEF_ARN" >> "$GITHUB_OUTPUT"
+echo "TASK_DEF_ARN=$NEW_TASK_ARN" >> $GITHUB_ENV

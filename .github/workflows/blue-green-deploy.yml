@@ -1,19 +1,12 @@
-name: Blue/Green Deploy
+name: Deploy
 
 on:
   push:
     branches: [main]
 
-permissions:
-  id-token: write
-  contents: read
-
 env:
+  AWS_REGION: us-east-1
   IMAGE_TAG: ${{ github.run_number }}
-
-concurrency:
-  group: production
-  cancel-in-progress: false
 
 jobs:
 
@@ -21,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     outputs:
-      image-uri: ${{ steps.set.outputs.image-uri }}
+      image: ${{ steps.out.outputs.image }}
 
     steps:
     - uses: actions/checkout@v4
@@ -31,20 +24,20 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ vars.AWS_REGION }}
+        aws-region: ${{ env.AWS_REGION }}
 
     - name: Login ECR
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Build & Push
+    - name: Build & Push (VERSIONED ONLY)
       run: |
-        IMAGE="${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}"
+        IMAGE=${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
         docker build -t $IMAGE .
         docker push $IMAGE
 
-    - name: Set output
-      id: set
-      run: echo "image-uri=${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}" >> $GITHUB_OUTPUT
+        echo "image=$IMAGE" >> $GITHUB_OUTPUT
+      id: out
 
 
   deploy:
@@ -59,62 +52,27 @@ jobs:
       with:
         aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ vars.AWS_REGION }}
+        aws-region: ${{ env.AWS_REGION }}
 
     - name: Make scripts executable
       run: chmod +x infra/scripts/*.sh
 
     - name: Detect slot
-      id: slot
+      run: bash infra/scripts/detect_slot.sh
       env:
         ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
         BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
         GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
         BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
         GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
-      run: bash infra/scripts/detect_slot.sh
+        AWS_REGION: ${{ env.AWS_REGION }}
 
-    - name: Register task
-      id: task
-      env:
-        IMAGE_URI: ${{ needs.build.outputs.image-uri }}
-        DEPLOY_SERVICE: ${{ steps.slot.outputs.deploy_service }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
+    - name: Register task definition
       run: bash infra/scripts/register_task.sh
+      env:
+        IMAGE_URI: ${{ needs.build.outputs.image }}
 
     - name: Deploy ECS
-      env:
-        ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-        DEPLOY_SERVICE: ${{ steps.slot.outputs.deploy_service }}
-        TASK_DEF_ARN: ${{ steps.task.outputs.task_def_arn }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
       run: bash infra/scripts/deploy.sh
-
-    - name: Health check
-      id: health
-      continue-on-error: true
-      env:
-        ALB_DNS_NAME: ${{ vars.ALB_DNS_NAME }}
-      run: bash infra/scripts/health_check.sh
-
-    - name: Rollback if failed
-      if: steps.health.outcome == 'failure'
       env:
         ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
-        BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
-        GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
-        BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
-        GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
-        DESIRED_COUNT: 1
-        AWS_REGION: ${{ vars.AWS_REGION }}
-      run: bash infra/scripts/rollback.sh
-
-    - name: Switch traffic
-      if: steps.health.outcome == 'success'
-      env:
-        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
-        DEPLOY_TG_ARN: ${{ steps.slot.outputs.deploy_tg }}
-        AWS_REGION: ${{ vars.AWS_REGION }}
-      run: bash infra/scripts/switch_traffic.sh
