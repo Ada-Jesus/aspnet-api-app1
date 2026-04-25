@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy ASPNET API
 
 on:
   push:
@@ -6,7 +6,6 @@ on:
 
 env:
   AWS_REGION: us-east-1
-  IMAGE_TAG: ${{ github.run_number }}
 
 jobs:
 
@@ -26,23 +25,46 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Login ECR
+    - name: Login to ECR
       uses: aws-actions/amazon-ecr-login@v2
 
-    - name: Build & Push (VERSIONED ONLY)
+    - name: Build & Push Image
+      id: out
       run: |
-        IMAGE=${{ vars.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+        IMAGE="${{ vars.ECR_REPOSITORY }}:${{ github.run_number }}"
 
         docker build -t $IMAGE .
         docker push $IMAGE
 
         echo "image=$IMAGE" >> $GITHUB_OUTPUT
-      id: out
+
+
+  detect-slot:
+    runs-on: ubuntu-latest
+    needs: build
+
+    outputs:
+      deploy_service: ${{ steps.slot.outputs.deploy_service }}
+      deploy_tg: ${{ steps.slot.outputs.deploy_tg }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Detect Slot
+      id: slot
+      run: bash infra/scripts/detect_slot.sh
+      env:
+        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+        BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
+        GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
+        BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
+        GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
+        AWS_REGION: ${{ env.AWS_REGION }}
 
 
   deploy:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, detect-slot]
 
     steps:
     - uses: actions/checkout@v4
@@ -54,20 +76,7 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ env.AWS_REGION }}
 
-    - name: Make scripts executable
-      run: chmod +x infra/scripts/*.sh
-
-    - name: Detect slot
-      run: bash infra/scripts/detect_slot.sh
-      env:
-        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
-        BLUE_TG_ARN: ${{ vars.BLUE_TG_ARN }}
-        GREEN_TG_ARN: ${{ vars.GREEN_TG_ARN }}
-        BLUE_SERVICE: ${{ vars.BLUE_SERVICE }}
-        GREEN_SERVICE: ${{ vars.GREEN_SERVICE }}
-        AWS_REGION: ${{ env.AWS_REGION }}
-
-    - name: Register task definition
+    - name: Register Task Definition
       run: bash infra/scripts/register_task.sh
       env:
         IMAGE_URI: ${{ needs.build.outputs.image }}
@@ -76,3 +85,11 @@ jobs:
       run: bash infra/scripts/deploy.sh
       env:
         ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+        TASK_DEF_ARN: ${{ env.TASK_DEF_ARN }}
+        DEPLOY_SERVICE: ${{ needs.detect-slot.outputs.deploy_service }}
+
+    - name: Switch Traffic
+      run: bash infra/scripts/switch_traffic.sh
+      env:
+        ALB_LISTENER_ARN: ${{ vars.ALB_LISTENER_ARN }}
+        DEPLOY_TG_ARN: ${{ needs.detect-slot.outputs.deploy_tg }}
