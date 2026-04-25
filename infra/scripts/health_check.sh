@@ -12,7 +12,7 @@ URL="http://${ALB_DNS_NAME}:8080${PATH_CHECK}"
 echo "==> Health check: $URL"
 
 for i in $(seq 1 "$RETRIES"); do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" || echo "000")
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
 
   if [ "$CODE" = "200" ]; then
     echo "Healthy"

@@ -7,10 +7,8 @@ set -euo pipefail
 
 echo "==> Registering task definition"
 
-TASK_FAMILY="$DEPLOY_SERVICE"
-
 RAW=$(aws ecs describe-task-definition \
-  --task-definition "$TASK_FAMILY" \
+  --task-definition "$DEPLOY_SERVICE" \
   --region "$AWS_REGION")
 
 UPDATED=$(echo "$RAW" | jq \

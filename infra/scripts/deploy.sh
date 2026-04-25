@@ -6,7 +6,7 @@ set -euo pipefail
 : "${TASK_DEF_ARN:?Missing TASK_DEF_ARN}"
 : "${AWS_REGION:?Missing AWS_REGION}"
 
-echo "==> Deploying to ECS service: $DEPLOY_SERVICE"
+echo "==> Deploying to $DEPLOY_SERVICE"
 
 aws ecs update-service \
   --cluster "$ECS_CLUSTER" \
