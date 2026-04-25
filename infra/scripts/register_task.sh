@@ -1,27 +1,35 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-: "${IMAGE_URI:?Missing IMAGE_URI}"
-: "${AWS_REGION:?Missing AWS_REGION}"
-: "${ECS_CLUSTER:?Missing ECS_CLUSTER}"
-: "${DEPLOY_SERVICE:?Missing DEPLOY_SERVICE}"
+: "${IMAGE_URI:?Missing}"
+: "${AWS_REGION:?Missing}"
+: "${DEPLOY_SERVICE:?Missing}"
 
-echo "==> Updating ECS service with new image..."
+echo "Registering new task definition with image: $IMAGE_URI"
 
-TASK_DEF_ARN=$(aws ecs describe-task-definition \
-  --task-definition "$DEPLOY_SERVICE" \
-  --query "taskDefinition.taskDefinitionArn" \
-  --output text \
+TASK_FAMILY="$DEPLOY_SERVICE"
+
+RAW=$(aws ecs describe-task-definition \
+  --task-definition "$TASK_FAMILY" \
   --region "$AWS_REGION")
 
-echo "Using task definition: $TASK_DEF_ARN"
+UPDATED=$(echo "$RAW" | jq \
+  --arg IMAGE "$IMAGE_URI" '
+  .taskDefinition
+  | .containerDefinitions[0].image = $IMAGE
+  | del(
+      .taskDefinitionArn,
+      .revision,
+      .status,
+      .requiresAttributes,
+      .compatibilities,
+      .registeredAt,
+      .registeredBy
+  )')
 
-echo "==> Updating service with force new deployment..."
+NEW_TASK_DEF=$(aws ecs register-task-definition \
+  --cli-input-json "$UPDATED" \
+  --query "taskDefinition.taskDefinitionArn" \
+  --output text)
 
-aws ecs update-service \
-  --cluster "$ECS_CLUSTER" \
-  --service "$DEPLOY_SERVICE" \
-  --force-new-deployment \
-  --region "$AWS_REGION"
-
-echo "DONE"
+echo "task_def_arn=$NEW_TASK_DEF" >> $GITHUB_OUTPUT

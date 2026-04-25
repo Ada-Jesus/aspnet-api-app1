@@ -1,7 +1,6 @@
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------------- IMPORTANT: ECS NETWORK BINDING ----------------
-// Ensures the app listens on the correct interface + port for ALB
+// ---------------- ECS BINDING ----------------
 builder.WebHost.UseUrls("http://0.0.0.0:8080");
 
 // ---------------- SERVICES ----------------
@@ -10,22 +9,14 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+// ---------------- SWAGGER (SAFE FOR DEV + ECS) ----------------
+app.UseSwagger();
+app.UseSwaggerUI();
 
-// ---------------- HEALTH CHECK (CRITICAL FOR ALB) ----------------
-app.MapGet("/health", () => Results.Ok("healthy"));
+// ---------------- HEALTH CHECK (ALB) ----------------
+app.MapGet("/health", () => Results.Ok("OK"));
 
-
-// ---------------- SWAGGER ----------------
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
-app.UseHttpsRedirection();
-
-
-// ---------------- API ----------------
+// ---------------- SAMPLE API ----------------
 var summaries = new[]
 {
     "Freezing", "Bracing", "Chilly", "Cool", "Mild",
@@ -35,8 +26,7 @@ var summaries = new[]
 app.MapGet("/weatherforecast", () =>
 {
     var forecast = Enumerable.Range(1, 5).Select(index =>
-        new WeatherForecast
-        (
+        new WeatherForecast(
             DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
             Random.Shared.Next(-20, 55),
             summaries[Random.Shared.Next(summaries.Length)]
@@ -48,10 +38,7 @@ app.MapGet("/weatherforecast", () =>
 .WithName("GetWeatherForecast")
 .WithOpenApi();
 
-
-// ---------------- START APP ----------------
 app.Run();
-
 
 // ---------------- MODEL ----------------
 record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
