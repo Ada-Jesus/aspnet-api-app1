@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${ALB_DNS_NAME:?Missing}"
+: "${ALB_DNS_NAME:?Missing ALB_DNS_NAME}"
 
-URL="http://$ALB_DNS_NAME/health"
+RETRIES="${HEALTH_RETRIES:-10}"
+DELAY="${HEALTH_DELAY:-5}"
+PATH_CHECK="${HEALTH_PATH:-/health}"
 
-for i in {1..10}; do
-  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+URL="http://${ALB_DNS_NAME}:8080${PATH_CHECK}"
+
+echo "==> Health check: $URL"
+
+for i in $(seq 1 "$RETRIES"); do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL" || echo "000")
 
   if [ "$CODE" = "200" ]; then
     echo "Healthy"
     exit 0
   fi
 
-  echo "Attempt $i failed: $CODE"
-  sleep 5
+  echo "Attempt $i: $CODE"
+  sleep "$DELAY"
 done
 
-echo "Service unhealthy"
+echo "FAILED HEALTH CHECK"
 exit 1

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${ALB_LISTENER_ARN:?Missing}"
-: "${BLUE_TG_ARN:?Missing}"
-: "${GREEN_TG_ARN:?Missing}"
-: "${BLUE_SERVICE:?Missing}"
-: "${GREEN_SERVICE:?Missing}"
-: "${AWS_REGION:?Missing}"
+: "${ALB_LISTENER_ARN:?Missing ALB_LISTENER_ARN}"
+: "${BLUE_TG_ARN:?Missing BLUE_TG_ARN}"
+: "${GREEN_TG_ARN:?Missing GREEN_TG_ARN}"
+: "${BLUE_SERVICE:?Missing BLUE_SERVICE}"
+: "${GREEN_SERVICE:?Missing GREEN_SERVICE}"
+: "${AWS_REGION:?Missing AWS_REGION}"
+
+echo "==> Detecting active slot..."
 
 LIVE_TG=$(aws elbv2 describe-listeners \
   --listener-arns "$ALB_LISTENER_ARN" \
@@ -15,15 +17,18 @@ LIVE_TG=$(aws elbv2 describe-listeners \
   --region "$AWS_REGION")
 
 if [ "$LIVE_TG" = "$BLUE_TG_ARN" ]; then
-  LIVE_SERVICE=$BLUE_SERVICE
-  DEPLOY_SERVICE=$GREEN_SERVICE
-  DEPLOY_TG=$GREEN_TG_ARN
+  DEPLOY_SERVICE="$GREEN_SERVICE"
+  DEPLOY_TG="$GREEN_TG_ARN"
+  LIVE_SERVICE="$BLUE_SERVICE"
 else
-  LIVE_SERVICE=$GREEN_SERVICE
-  DEPLOY_SERVICE=$BLUE_SERVICE
-  DEPLOY_TG=$BLUE_TG_ARN
+  DEPLOY_SERVICE="$BLUE_SERVICE"
+  DEPLOY_TG="$BLUE_TG_ARN"
+  LIVE_SERVICE="$GREEN_SERVICE"
 fi
 
-echo "deploy_service=$DEPLOY_SERVICE" >> $GITHUB_OUTPUT
-echo "deploy_tg=$DEPLOY_TG" >> $GITHUB_OUTPUT
-echo "live_service=$LIVE_SERVICE" >> $GITHUB_OUTPUT
+{
+  echo "deploy_service=$DEPLOY_SERVICE"
+  echo "deploy_tg=$DEPLOY_TG"
+  echo "live_service=$LIVE_SERVICE"
+  echo "live_tg=$LIVE_TG"
+} >> "$GITHUB_OUTPUT"

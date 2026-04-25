@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${IMAGE_URI:?Missing}"
-: "${AWS_REGION:?Missing}"
-: "${DEPLOY_SERVICE:?Missing}"
+: "${IMAGE_URI:?Missing IMAGE_URI}"
+: "${AWS_REGION:?Missing AWS_REGION}"
+: "${DEPLOY_SERVICE:?Missing DEPLOY_SERVICE}"
 
-echo "Registering new task definition with image: $IMAGE_URI"
+echo "==> Registering task definition"
 
 TASK_FAMILY="$DEPLOY_SERVICE"
 
@@ -25,11 +25,12 @@ UPDATED=$(echo "$RAW" | jq \
       .compatibilities,
       .registeredAt,
       .registeredBy
-  )')
+    )')
 
-NEW_TASK_DEF=$(aws ecs register-task-definition \
+TASK_DEF_ARN=$(aws ecs register-task-definition \
   --cli-input-json "$UPDATED" \
+  --region "$AWS_REGION" \
   --query "taskDefinition.taskDefinitionArn" \
   --output text)
 
-echo "task_def_arn=$NEW_TASK_DEF" >> $GITHUB_OUTPUT
+echo "task_def_arn=$TASK_DEF_ARN" >> "$GITHUB_OUTPUT"
